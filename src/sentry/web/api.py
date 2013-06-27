@@ -148,7 +148,7 @@ class APIView(BaseView):
         """
         Returns either the Origin or Referer value from the request headers.
         """
-        return request.META.get('HTTP_ORIGIN', request.META.get('HTTP_REFERER'))
+        return request.META.get('HTTP_ORIGIN', request.META.get('HTTP_REFERER', ''))
 
     def _dispatch(self, request, project_id=None, *args, **kwargs):
         request.user = AnonymousUser()
@@ -159,10 +159,11 @@ class APIView(BaseView):
             return HttpResponse(str(e), content_type='text/plain', status=400)
 
         origin = self.get_request_origin(request)
-        if origin is not None:
+        invalid_origin = not is_valid_origin(origin, project)
+        if origin:
             if not project:
                 return HttpResponse('Your client must be upgraded for CORS support.')
-            elif not is_valid_origin(origin, project):
+            elif invalid_origin:
                 return HttpResponse('Invalid origin: %r' % origin, content_type='text/plain', status=400)
 
         # XXX: It seems that the OPTIONS call does not always include custom headers
@@ -191,10 +192,16 @@ class APIView(BaseView):
                 return HttpResponse('Project ID mismatch', content_type='text/plain', status=400)
 
             auth = Auth(auth_vars)
+            sentry_data_dict = safely_load_json_string(auth_vars.get('sentry_data', '{}'))
+            platform = sentry_data_dict.get('platform', '').lower()
+
+            if auth.version < 3:
+                if invalid_origin and platform == 'javascript':
+                    return HttpResponse('Invalid origin: %r' % origin, content_type='text/plain', status=400)
 
             if auth.version >= 3:
                 # Version 3 enforces secret key for server side requests
-                if origin is None and not auth.secret_key:
+                if not origin and not auth.secret_key:
                     return HttpResponse('Missing required attribute in authentication header: sentry_secret', status=400)
 
             try:
